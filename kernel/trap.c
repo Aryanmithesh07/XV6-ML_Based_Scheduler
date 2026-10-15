@@ -81,9 +81,29 @@ usertrap(void)
   if (killed(p))
     kexit(-1);
 
-  // give up the CPU if this is a timer interrupt.
-  if (which_dev == 2)
+ 
+  // Give up the CPU if this is a timer interrupt.
+  if (which_dev == 2) {
+#if SCHED_POLICY == SCHED_MLFQ
+    struct proc *p = myproc();
+
+    if (p != 0 && p->state == RUNNING) {
+      int quantum[4] = {1, 2, 4, 8};
+
+      p->total_ticks++;
+      p->slice_ticks++;
+
+      if (p->slice_ticks >= quantum[p->queue_level]) {
+        if (p->queue_level < 3)
+          p->queue_level++;
+
+        p->slice_ticks = 0;
+      }
+    }
+#endif
     yield();
+  }
+
 
   prepare_return();
 

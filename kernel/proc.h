@@ -1,4 +1,14 @@
+
+// Scheduling metadata
+
+
+#define SCHED_FCFS  1
+#define SCHED_PBS   2
+#define SCHED_MLFQ  3
+
+#define SCHED_POLICY SCHED_PBS
 // Saved registers for kernel context switches.
+
 struct context {
   uint64 ra;
   uint64 sp;
@@ -79,26 +89,33 @@ struct trapframe {
 enum procstate { UNUSED, USED, SLEEPING, RUNNABLE, RUNNING, ZOMBIE };
 
 // Per-process state
+
 struct proc {
   struct spinlock lock;
 
   // p->lock must be held when using these:
-  enum procstate state; // Process state
-  void *chan;           // If non-zero, sleeping on chan
-  int killed;           // If non-zero, have been killed
-  int xstate;           // Exit status to be returned to parent's wait
-  int pid;              // Process ID
+  enum procstate state;
+  void *chan;
+  int killed;
+  int xstate;
+  int pid;
 
   // wait_lock must be held when using this:
-  struct proc *parent; // Parent process
+  struct proc *parent;
 
   // these are private to the process, so p->lock need not be held.
-  uint64 kstack;               // Virtual address of kernel stack
-  uint64 sz;                   // Size of process memory (bytes)
-  pagetable_t pagetable;       // User page table
-  struct trapframe *trapframe; // data page for trampoline.S
-  struct context context;      // swtch() here to run process
-  struct file *ofile[NOFILE];  // Open files
-  struct inode *cwd;           // Current directory
-  char name[16];               // Process name (debugging)
+  uint64 kstack;
+  uint64 sz;
+  pagetable_t pagetable;
+  struct trapframe *trapframe;
+  struct context context;
+  struct file *ofile[NOFILE];
+  struct inode *cwd;
+  char name[16];
+
+  // Scheduling metadata
+  int priority;       // PBS: lower value = higher priority
+  int queue_level;    // MLFQ: 0 is the highest queue
+  int slice_ticks;    // Ticks consumed in the current MLFQ queue
+  int total_ticks;    // Total CPU timer ticks
 };

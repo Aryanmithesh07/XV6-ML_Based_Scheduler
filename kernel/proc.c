@@ -6,6 +6,18 @@
 #include "proc.h"
 #include "defs.h"
 
+
+
+
+// #define SCHED_FCFS  1
+// #define SCHED_PBS   2
+// #define SCHED_MLFQ  3
+
+// Change this value to test each policy.
+// #define SCHED_POLICY SCHED_PBS
+
+#define MLFQ_LEVELS 4
+
 struct cpu cpus[NCPU];
 
 struct proc proc[NPROC];
@@ -13,6 +25,7 @@ struct proc proc[NPROC];
 struct proc *initproc;
 
 int nextpid = 1;
+static int last_pid = -1;
 struct spinlock pid_lock;
 
 extern void forkret(void);
@@ -121,9 +134,24 @@ allocproc(void)
   }
   return 0;
 
+
 found:
   p->pid = allocpid();
   p->state = USED;
+
+   // Initialize scheduling variables
+  p->priority = 60;
+
+  if(p->pid == 4)
+    p->priority = 80;
+  else if(p->pid == 5)
+    p->priority = 10;
+  else if(p->pid == 6)
+    p->priority = 40;
+
+  p->queue_level = 0;
+  p->slice_ticks = 0;
+  p->total_ticks = 0;
 
   // Allocate a trapframe page.
   if ((p->trapframe = (struct trapframe *)kalloc()) == 0) {
@@ -131,6 +159,7 @@ found:
     release(&p->lock);
     return 0;
   }
+
 
   // An empty user page table.
   p->pagetable = proc_pagetable(p);
@@ -418,6 +447,71 @@ kwait(uint64 addr)
   }
 }
 
+static struct proc*
+pickproc(void)
+{
+  struct proc *p;
+  struct proc *best = 0;
+
+  int best_pid = 0x7fffffff;
+int best_priority = 0x7fffffff;
+int best_level = MLFQ_LEVELS;
+
+(void)best_priority;
+(void)best_level;
+  // First pass: find the best candidate.
+  for(p = proc; p < &proc[NPROC]; p++) {
+    acquire(&p->lock);
+
+    if(p->state == RUNNABLE) {
+      int choose = 0;
+
+#if SCHED_POLICY == SCHED_FCFS
+      // Lowest PID approximates earliest creation.
+      if(p->pid < best_pid)
+        choose = 1;
+
+#elif SCHED_POLICY == SCHED_PBS
+      // Lower numerical priority wins.
+      if(p->priority < best_priority ||
+         (p->priority == best_priority &&
+          p->pid < best_pid))
+        choose = 1;
+
+#elif SCHED_POLICY == SCHED_MLFQ
+      // Lower queue level wins.
+      if(p->queue_level < best_level ||
+         (p->queue_level == best_level &&
+          p->pid < best_pid))
+        choose = 1;
+#endif
+
+      if(choose) {
+        best = p;
+        best_pid = p->pid;
+        best_priority = p->priority;
+        best_level = p->queue_level;
+      }
+    }
+
+    release(&p->lock);
+  }
+
+  if(best == 0)
+    return 0;
+
+  // Reacquire and validate the chosen process.
+  acquire(&best->lock);
+
+  if(best->state != RUNNABLE) {
+    release(&best->lock);
+    return 0;
+  }
+
+  // Return with best->lock held, as scheduler expects.
+  return best;
+}
+
 // Per-CPU process scheduler.
 // Each CPU calls scheduler() after setting itself up.
 // Scheduler never returns.  It loops, doing:
@@ -425,6 +519,7 @@ kwait(uint64 addr)
 //  - swtch to start running that process.
 //  - eventually that process transfers control
 //    via swtch back to the scheduler.
+
 void
 scheduler(void)
 {
@@ -433,41 +528,36 @@ scheduler(void)
 
   c->proc = 0;
   for (;;) {
-    // The most recent process to run may have had interrupts
-    // turned off; enable them to avoid a deadlock if all
-    // processes are waiting. Then turn them back off
-    // to avoid a possible race between an interrupt
-    // and wfi.
     intr_on();
     intr_off();
 
-    int found = 0;
-    for (p = proc; p < &proc[NPROC]; p++) {
-      acquire(&p->lock);
-      if (p->state == RUNNABLE) {
-        // Switch to chosen process.  It is the process's job
-        // to release its lock and then reacquire it
-        // before jumping back to us.
-        p->state = RUNNING;
-        c->proc = p;
-        swtch(&c->context, &p->context);
+ p = pickproc();
 
-        // Don't re-enable interrupts on release.
-        mycpu()->intena = 0;
-
-        // Process is done running for now.
-        // It should have changed its p->state before coming back.
-        c->proc = 0;
-        found = 1;
-      }
-      release(&p->lock);
-    }
-    if (found == 0) {
-      // nothing to run; stop running on this core until an interrupt.
+if(p != 0 && p->pid != last_pid) {
+  printk("PBS selected PID %d priority %d\n",
+         p->pid, p->priority);
+  last_pid = p->pid;
+}
+    if (p == 0) {
+      // Nothing to run.
       asm volatile("wfi");
+      continue;
     }
+
+    // pickproc() returns with p->lock held.
+    p->state = RUNNING;
+    c->proc = p;
+    swtch(&c->context, &p->context);
+
+    // Restore the original xv6 interrupt handling.
+    mycpu()->intena = 0;
+
+    // Process is done running for now.
+    c->proc = 0;
+    release(&p->lock);
   }
 }
+
 
 // Switch to scheduler.  Must hold only p->lock
 // and have changed proc->state. Saves and restores
